@@ -1,6 +1,6 @@
 # TECS Engine: Element-Slot Network (ESN)
 
-TECS (Tensor-based Evolving Computing System) is a high-performance simulation and training engine for **Element-Slot interaction**. It provides a hybrid architecture that bridges discrete dynamic system modeling with modern neuro-symbolic learning.
+TECS (Time Element Cycle Slot engine) is a high-performance simulation and training engine for **Element-Slot interaction**. It provides a hybrid architecture that bridges discrete dynamic system modeling with modern neuro-symbolic learning.
 
 ## 🚀 Core Philosophy: Element-Slot Interaction (ESI)
 
