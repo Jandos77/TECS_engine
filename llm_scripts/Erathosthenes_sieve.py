@@ -8,24 +8,18 @@ from dataclasses import dataclass, field
 # ─────────────────────────────────────────────────────────────
 # CONFIGURATION CLASS
 # ─────────────────────────────────────────────────────────────
-from dataclasses import dataclass, field
-
 @dataclass
 class SimulationConfig:
-    """Simulation parameters in one object"""
-    num_slots: int = 6
-    num_ticks: int = 8
-    time_sleep: float = 0.15
+    num_slots: int = 100
+    num_ticks: int = 100
+    time_sleep: float = 0.05
     random_seed: int = 42
-    allow_overlap: bool = False
+    allow_overlap: bool = True
     global_shift: bool = False
     real_time: bool = True
-
-    # Slot presets (optional input)
     slot_presets: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        # ===== Validation =====
         if self.num_slots <= 0:
             raise ValueError("num_slots must be > 0")
         if self.num_ticks <= 0:
@@ -33,28 +27,29 @@ class SimulationConfig:
         if self.time_sleep < 0:
             raise ValueError("time_sleep cannot be negative")
 
-        # ===== Default presets (if not provided) =====
         if not self.slot_presets:
             self.slot_presets = {
-                "A": [0, 4, 5],
-                "B": [2, 3],
-                "D": [1],
+                "A": [i for i in range(self.num_slots) if i % 6 in [0, 4, 5]],
+                "B": [i for i in range(self.num_slots) if i % 6 in [2, 3]],
+                "D": [i for i in range(self.num_slots) if i % 6 == 1],
             }
 
-        # ===== Always generate dynamic "All" =====
         self.slot_presets["All"] = list(range(self.num_slots))
 
 
 # ─────────────────────────────────────────────────────────────
-# ELEMENT CLASS (unchanged)
+# ELEMENT CLASS
 # ─────────────────────────────────────────────────────────────
 class Element:
-    def __init__(self, name, weight=1, k=1, t0=0,
+    def __init__(self, name, weight=1, k=1, step=1, t0=0,
                  start_pos=0, allowed_slots=None, set_name="",
-                 priority=0, stall_probability=0.0, aging_factor=0.5):
+                 priority=0, stall_probability=0.0, aging_factor=0.5,
+                 stop_mode=None, stop_value=None):
+
         self.name = name
         self.weight = weight
         self.k = k
+        self.step = step
         self.t0 = t0
         self.start_pos = start_pos
         self.allowed_slots = allowed_slots or []
@@ -63,9 +58,19 @@ class Element:
         self.priority = priority
         self.aging_factor = aging_factor
         self.stall_probability = stall_probability
-        self.local_index = (self.allowed_slots.index(start_pos) 
-                           if start_pos in (allowed_slots or []) else 0)
+
+        self.stop_mode = stop_mode
+        self.stop_value = stop_value
+        self.stopped = False
+
+        self.local_index = (
+            self.allowed_slots.index(start_pos)
+            if start_pos in (allowed_slots or []) else 0
+        )
+
         self.current_pos = start_pos
+        self.last_pos = start_pos
+
         self.wait_time = 0
         self.total_wait = 0
         self.move_count = 0
@@ -73,12 +78,46 @@ class Element:
         self.stall_count = 0
         self.stall_history = []
 
+    def check_stop(self, pos):
+        if not self.stop_mode:
+            return False
+
+        if self.stop_mode == "auto_last":
+            return pos == self.allowed_slots[-1]
+
+        if self.stop_mode == "first_hit":
+            return pos == self.stop_value
+
+        if self.stop_mode == "gte":
+            return pos >= self.stop_value
+
+        if self.stop_mode == "range":
+            a, b = self.stop_value
+            return a <= pos <= b
+
+        if self.stop_mode == "custom":
+            return self.stop_value(pos)
+
+        return False
+
     def local_position(self, t):
+        if self.stopped:
+            return self.last_pos
+
         if t < self.t0:
-            return self.start_pos
+            return self.last_pos
+
         moves = (t - self.t0) // self.k
-        idx = (self.local_index + moves) % len(self.allowed_slots)
-        return self.allowed_slots[idx]
+        idx = (self.local_index + self.step * moves) % len(self.allowed_slots)
+        pos = self.allowed_slots[idx]
+
+        if self.check_stop(pos):
+            self.stopped = True
+            self.last_pos = pos
+            return pos
+
+        self.last_pos = pos
+        return pos
 
     def update_dynamic_priority(self):
         self.priority = self.base_priority + self.wait_time * self.aging_factor
@@ -89,13 +128,9 @@ class Element:
             return False
         return random.random() < self.stall_probability
 
-    def __repr__(self):
-        return (f"{self.name}(set={self.set_name}, w={self.weight}, "
-                f"k={self.k}, pri={self.base_priority})")
-
 
 # ─────────────────────────────────────────────────────────────
-# METRICS CLASS (keys already fixed)
+# METRICS CLASS
 # ─────────────────────────────────────────────────────────────
 class Metrics:
     def __init__(self, num_slots, num_ticks):
@@ -115,7 +150,7 @@ class Metrics:
         })
         self.history = []
 
-    def record_slot_usage(self, slots, weights, t):
+    def record_slot_usage(self, slots, weights):
         for i in range(self.num_slots):
             if slots[i]:
                 self.slot_usage[i] += 1
@@ -161,23 +196,20 @@ class Metrics:
 
 
 # ─────────────────────────────────────────────────────────────
-# PRINT FUNCTIONS (translated, without logic changes)
+# PRINT FUNCTIONS
 # ─────────────────────────────────────────────────────────────
 COLORS = ["\033[91m", "\033[92m", "\033[93m", "\033[94m", "\033[95m", "\033[96m"]
 RESET = "\033[0m"
 
-
-def print_initial(elements, config: SimulationConfig):
+def print_initial(elements, config):
     print("\n=== INITIAL PARAMETERS ===")
-    hdr = f"{'Name':<6}{'Set':<5}{'W':<3}{'k':<3}{'t0':<3}{'Start':<6}{'Pri':<5}{'Age':<5}{'Stall%':<6}Allowed"
+    hdr = f"{'Name':<6}{'Set':<5}{'W':<3}{'k':<3}{'Step':<4}{'t0':<4}{'Start':<6}{'Pri':<5}{'StopMode':<10}{'StopVal':<10}Allowed"
     print(hdr)
     print("-" * len(hdr))
     for e in elements:
-        print(f"{e.name:<6}{e.set_name:<5}{e.weight:<3}{e.k:<3}{e.t0:<3}"
-              f"{e.start_pos:<6}{e.base_priority:<5}{e.aging_factor:<5.2f}"
-              f"{e.stall_probability*100:<6.1f}%{e.allowed_slots}")
-    print(f"\nslots={config.num_slots} | ticks={config.num_ticks} | "
-          f"shift={config.global_shift} | overlap={config.allow_overlap}")
+        print(f"{e.name:<6}{e.set_name:<5}{e.weight:<3}{e.k:<3}{e.step:<4}{e.t0:<4}"
+              f"{e.start_pos:<6}{e.base_priority:<5}{str(e.stop_mode):<10}{str(e.stop_value):<10}{e.allowed_slots}")
+    print(f"\nslots={config.num_slots} | ticks={config.num_ticks} | shift={config.global_shift} | overlap={config.allow_overlap}")
 
 
 def print_table(history):
@@ -189,7 +221,7 @@ def print_table(history):
                 row.append(f"{'+'.join(slots[i])}({weights[i]})")
             else:
                 row.append("0")
-        print(f"{t:2d}: {row}")
+        print(f"{t:3d}: {row}")
 
 
 def print_metrics(metrics, elements):
@@ -201,13 +233,13 @@ def print_metrics(metrics, elements):
     print(f"Utilization: {summary['slot_utilization']:.1f}% (total) / {summary['avg_slot_utilization']:.1f}% (avg)")
     print(f"Collisions: {metrics.collision_count} (blocked: {metrics.collision_prevented})")
     print(f"Stall events: {metrics.stall_events}")
-    
+
     print("\nSlot load:")
     for i in range(metrics.num_slots):
         pct = summary["slot_usage_per_slot"][i]
-        bar = "#" * int(pct / 5)
+        bar = "#" * int(pct / 2)
         print(f"  [{i}] {pct:5.1f}% | weight:{summary['avg_weight_per_slot'][i]:4.2f} {bar}")
-        
+
     print("\nElements:")
     print(f"{'Name':<6}{'Set':<4}{'Moves':<5}{'Block':<5}{'Wait':<6}{'Prior':<6}{'Stall'}")
     for e in sorted(elements, key=lambda x: x.set_name + x.name):
@@ -220,20 +252,19 @@ def print_metrics(metrics, elements):
 
 
 # ─────────────────────────────────────────────────────────────
-# SIMULATION (now takes config instead of 7 individual arguments)
+# SIMULATION
 # ─────────────────────────────────────────────────────────────
-def simulate(elements, config: SimulationConfig):
+def simulate(elements, config):
     if config.random_seed is not None:
         random.seed(config.random_seed)
 
     metrics = Metrics(config.num_slots, config.num_ticks)
     history = []
-    elem_by_name = {e.name: e for e in elements}
 
     for t in range(config.num_ticks):
         slots = [[] for _ in range(config.num_slots)]
-        slot_elements = [[] for _ in range(config.num_slots)]
         weights = [0] * config.num_slots
+        slot_elements = [[] for _ in range(config.num_slots)]
         shift = t if config.global_shift else 0
 
         for e in elements:
@@ -246,127 +277,80 @@ def simulate(elements, config: SimulationConfig):
                 continue
 
             if e.should_stall():
-                e.stall_count += 1
-                e.stall_history.append(t)
                 e.wait_time += 1
-                e.total_wait += 1
                 metrics.record_stall(e.name)
-                metrics.element_stats[e.name]["wait_times"].append(e.wait_time)
                 continue
 
             local_pos = e.local_position(t)
             pos = (local_pos + shift) % config.num_slots
 
-            if not config.allow_overlap:
-                conflict = False
-                for existing_elem in slot_elements[pos]:
-                    if existing_elem.set_name != e.set_name:
-                        conflict = True
-                        break
-                
-                if conflict:
-                    metrics.record_collision(prevented=True)
-                    e.block_count += 1
-                    e.wait_time += 1
-                    e.total_wait += 1
-                    metrics.element_stats[e.name]["wait_times"].append(e.wait_time)
-                    continue
-
-            # Successful placement
             slots[pos].append(e.name)
             slot_elements[pos].append(e)
             weights[pos] += e.weight
+
             e.move_count += 1
             e.current_pos = pos
+            e.last_pos = pos
+            e.wait_time = 0
 
-            if e.wait_time > 0:
-                e.wait_time = 0
-
-            metrics.element_stats[e.name]["moves"] = e.move_count
-            metrics.element_stats[e.name]["blocks"] = e.block_count
-
-        metrics.record_slot_usage(slots, weights, t)
+        metrics.record_slot_usage(slots, weights)
         history.append((slots, weights))
 
         if config.real_time:
-            print(f"\nt={t:2d} | shift={shift:2d} | ", end="")
+            print(f"t={t:3d} | ", end="")
             for i in range(config.num_slots):
                 if slots[i]:
-                    s = "+".join(slots[i])
-                    w = weights[i]
-                    marker = ""
-                    for ename in slots[i]:
-                        elem = elem_by_name[ename]
-                        if elem.priority > elem.base_priority + 2:
-                            marker += "^"
-                    color = COLORS[i % len(COLORS)]
-                    print(f"{color}{s}{marker}({w}){RESET} ", end="")
+                    print(f"{'+'.join(slots[i])}({weights[i]}) ", end="")
                 else:
                     print("0 ", end="")
-            
-            stalled = [e.name for e in elements if t in e.stall_history]
-            if stalled:
-                print(f" | STALL:{','.join(stalled)}", end="")
             print()
             time.sleep(config.time_sleep)
 
     for e in elements:
         metrics.record_element_stat(e)
 
-    metrics.history = history
     return history, metrics
 
 
 # ─────────────────────────────────────────────────────────────
-# MAIN (now clean and declarative)
+# MAIN
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # 1. Create config — all parameters in one place
+    # 1. Create config
     config = SimulationConfig(
         num_slots=100,
-        num_ticks=3000,
+        num_ticks=100,
         time_sleep=0.05,
         random_seed=42,
         allow_overlap=True,
         global_shift=False,
         real_time=True,
-        # slot_presets = {
-        #         "A": [0, 4, 5],
-        #         "B": [2, 3],
-        #         "D": [1],
-        #     }
     )
 
-    # 2. Create elements using slot presets from config
     elements = [
-        Element("A1", k=2, start_pos=1, allowed_slots=config.slot_presets["All"], 
+        Element("A1", k=2, step=2, start_pos=4, stop_mode="auto_last", allowed_slots=config.slot_presets["All"], 
                 set_name="A", priority=10, stall_probability=0.0, aging_factor=0.8, weight=1),
-        Element("A2", k=3, start_pos=2, allowed_slots=config.slot_presets["All"], 
+        Element("A2", k=3, step=3, start_pos=6, stop_mode="auto_last", allowed_slots=config.slot_presets["All"], 
                 set_name="A", priority=10, stall_probability=0.0, aging_factor=1.2, weight=1),
-        Element("A3", k=5, start_pos=4, allowed_slots=config.slot_presets["All"], 
+        Element("A3", k=5, step=5, start_pos=10, stop_mode="auto_last", allowed_slots=config.slot_presets["All"], 
                 set_name="A", priority=10, stall_probability=0.0, aging_factor=0.5, weight=1),
-        Element("B1", k=7, start_pos=6, allowed_slots=config.slot_presets["All"], 
+        Element("B1", k=7, step=7, start_pos=14, stop_mode="auto_last", allowed_slots=config.slot_presets["All"], 
                 set_name="B", priority=10, stall_probability=0.0, aging_factor=1.0, weight=1),
-        Element("B2", k=11, start_pos=10, allowed_slots=config.slot_presets["All"], 
+        Element("B2", k=11, step=11, start_pos=22, stop_mode="auto_last", allowed_slots=config.slot_presets["All"], 
                 set_name="B", priority=10, stall_probability=0.0, aging_factor=0.3, weight=1),
-        Element("D1", k=13, start_pos=12, allowed_slots=config.slot_presets["All"], 
+        Element("D1", k=13, step=13, start_pos=26, stop_mode="auto_last", allowed_slots=config.slot_presets["All"], 
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D2", k=17, start_pos=16, allowed_slots=config.slot_presets["All"],
+        Element("D2", k=17, step=17, start_pos=34, stop_mode="auto_last", allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D3", k=19, start_pos=18, allowed_slots=config.slot_presets["All"],
+        Element("D3", k=19, step=19, start_pos=38, stop_mode="auto_last", allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D4", k=23, start_pos=22, allowed_slots=config.slot_presets["All"],
+        Element("D4", k=23, step=23, start_pos=46, stop_mode="auto_last", allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D5", k=29, start_pos=28, allowed_slots=config.slot_presets["All"],
+        Element("D5", k=29, step=29, start_pos=58, stop_mode="auto_last", allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1)   
-
     ]
 
-    # 3. Launch
     print_initial(elements, config)
-    print(f"Seed: {config.random_seed}\n")
-
     history, metrics = simulate(elements, config)
-
     print_table(history)
     print_metrics(metrics, elements)

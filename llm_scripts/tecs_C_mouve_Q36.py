@@ -224,31 +224,32 @@ def print_metrics(metrics, elements):
 # SIMULATION SETUP
 # =========================
 if __name__ == "__main__":
-    num_slots = 6
-    num_ticks = 12
+    num_slots = 4
+    num_ticks = 25
     time_sleep = 0.2  # delay between ticks in real-time mode
 
     # Allowed slots sets for different groups
     A_slots = [0, 4, 5]
     B_slots = [2, 3]
     D_slots = [1]
+    All_slots = [0, 1, 2, 3, 4, 5]
 
     elements = [
         # Set A (cyclically by [0,4,5])
-        Element("A1", k=2, start_pos=0, allowed_slots=A_slots, set_name="A", priority=10),
+        Element("A1", k=2, start_pos=0, allowed_slots=All_slots, set_name="A", priority=10),
         Element("A2", k=1, start_pos=4, allowed_slots=A_slots, set_name="A", priority=5),
-        Element("A3", k=3, start_pos=5, allowed_slots=A_slots, set_name="A", priority=8),
+        Element("A3", k=3, start_pos=5, allowed_slots=All_slots, set_name="A", priority=8),
 
         # Set B (cyclically by [2,3])
-        Element("B1", k=1, start_pos=2, allowed_slots=B_slots, set_name="B", priority=7),
-        Element("B2", k=2, start_pos=3, allowed_slots=B_slots, set_name="B", priority=3),
+        Element("B1", k=1, start_pos=2, allowed_slots=All_slots, set_name="B", priority=7),
+        Element("B2", k=2, start_pos=3, allowed_slots=A_slots, set_name="B", priority=3),
 
         # Set D (fixed slot 1)
-        Element("D1", k=1, start_pos=1, allowed_slots=D_slots, set_name="D", priority=15, weight=2),
+        Element("D1", k=1, start_pos=1, allowed_slots=All_slots, set_name="D", priority=15, weight=2),
     ]
 
     # Simulation parameters
-    allow_overlap = False   # [x] forbid overlap between different sets
+    allow_overlap = True   # [x] forbid overlap between different sets
     global_shift = True     # [v] enable global shift (system rotation)
     real_time_mode = True   # [v] step-by-step output with delay
 

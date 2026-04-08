@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 # ─────────────────────────────────────────────────────────────
 # CONFIGURATION CLASS
 # ─────────────────────────────────────────────────────────────
-from dataclasses import dataclass, field
-
 @dataclass
 class SimulationConfig:
     """Simulation parameters in one object"""
@@ -46,15 +44,16 @@ class SimulationConfig:
 
 
 # ─────────────────────────────────────────────────────────────
-# ELEMENT CLASS (unchanged)
+# ELEMENT CLASS with step
 # ─────────────────────────────────────────────────────────────
 class Element:
-    def __init__(self, name, weight=1, k=1, t0=0,
+    def __init__(self, name, weight=1, k=1, step=1, t0=0,
                  start_pos=0, allowed_slots=None, set_name="",
                  priority=0, stall_probability=0.0, aging_factor=0.5):
         self.name = name
         self.weight = weight
-        self.k = k
+        self.k = k               # ticks per move
+        self.step = step         # spatial step (new)
         self.t0 = t0
         self.start_pos = start_pos
         self.allowed_slots = allowed_slots or []
@@ -74,10 +73,11 @@ class Element:
         self.stall_history = []
 
     def local_position(self, t):
+        """Calculate position using k and step"""
         if t < self.t0:
             return self.start_pos
         moves = (t - self.t0) // self.k
-        idx = (self.local_index + moves) % len(self.allowed_slots)
+        idx = (self.local_index + self.step * moves) % len(self.allowed_slots)
         return self.allowed_slots[idx]
 
     def update_dynamic_priority(self):
@@ -91,11 +91,11 @@ class Element:
 
     def __repr__(self):
         return (f"{self.name}(set={self.set_name}, w={self.weight}, "
-                f"k={self.k}, pri={self.base_priority})")
+                f"k={self.k}, step={self.step}, pri={self.base_priority})")
 
 
 # ─────────────────────────────────────────────────────────────
-# METRICS CLASS (keys already fixed)
+# METRICS CLASS
 # ─────────────────────────────────────────────────────────────
 class Metrics:
     def __init__(self, num_slots, num_ticks):
@@ -161,19 +161,18 @@ class Metrics:
 
 
 # ─────────────────────────────────────────────────────────────
-# PRINT FUNCTIONS (translated, without logic changes)
+# PRINT FUNCTIONS
 # ─────────────────────────────────────────────────────────────
 COLORS = ["\033[91m", "\033[92m", "\033[93m", "\033[94m", "\033[95m", "\033[96m"]
 RESET = "\033[0m"
 
-
 def print_initial(elements, config: SimulationConfig):
     print("\n=== INITIAL PARAMETERS ===")
-    hdr = f"{'Name':<6}{'Set':<5}{'W':<3}{'k':<3}{'t0':<3}{'Start':<6}{'Pri':<5}{'Age':<5}{'Stall%':<6}Allowed"
+    hdr = f"{'Name':<6}{'Set':<5}{'W':<3}{'k':<3}{'Step':<4}{'t0':<3}{'Start':<6}{'Pri':<5}{'Age':<5}{'Stall%':<6}Allowed"
     print(hdr)
     print("-" * len(hdr))
     for e in elements:
-        print(f"{e.name:<6}{e.set_name:<5}{e.weight:<3}{e.k:<3}{e.t0:<3}"
+        print(f"{e.name:<6}{e.set_name:<5}{e.weight:<3}{e.k:<3}{e.step:<4}{e.t0:<3}"
               f"{e.start_pos:<6}{e.base_priority:<5}{e.aging_factor:<5.2f}"
               f"{e.stall_probability*100:<6.1f}%{e.allowed_slots}")
     print(f"\nslots={config.num_slots} | ticks={config.num_ticks} | "
@@ -220,7 +219,7 @@ def print_metrics(metrics, elements):
 
 
 # ─────────────────────────────────────────────────────────────
-# SIMULATION (now takes config instead of 7 individual arguments)
+# SIMULATION
 # ─────────────────────────────────────────────────────────────
 def simulate(elements, config: SimulationConfig):
     if config.random_seed is not None:
@@ -318,48 +317,42 @@ def simulate(elements, config: SimulationConfig):
 
 
 # ─────────────────────────────────────────────────────────────
-# MAIN (now clean and declarative)
+# MAIN
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # 1. Create config — all parameters in one place
+    # 1. Create config
     config = SimulationConfig(
         num_slots=100,
-        num_ticks=3000,
+        num_ticks=100,
         time_sleep=0.05,
         random_seed=42,
         allow_overlap=True,
         global_shift=False,
         real_time=True,
-        # slot_presets = {
-        #         "A": [0, 4, 5],
-        #         "B": [2, 3],
-        #         "D": [1],
-        #     }
     )
 
-    # 2. Create elements using slot presets from config
+    # 2. Create elements with step explicitly
     elements = [
-        Element("A1", k=2, start_pos=1, allowed_slots=config.slot_presets["All"], 
+        Element("A1", k=2, step=2, start_pos=2, allowed_slots=config.slot_presets["All"], 
                 set_name="A", priority=10, stall_probability=0.0, aging_factor=0.8, weight=1),
-        Element("A2", k=3, start_pos=2, allowed_slots=config.slot_presets["All"], 
+        Element("A2", k=3, step=3, start_pos=3, allowed_slots=config.slot_presets["All"], 
                 set_name="A", priority=10, stall_probability=0.0, aging_factor=1.2, weight=1),
-        Element("A3", k=5, start_pos=4, allowed_slots=config.slot_presets["All"], 
+        Element("A3", k=5, step=5, start_pos=5, allowed_slots=config.slot_presets["All"], 
                 set_name="A", priority=10, stall_probability=0.0, aging_factor=0.5, weight=1),
-        Element("B1", k=7, start_pos=6, allowed_slots=config.slot_presets["All"], 
+        Element("B1", k=7, step=7, start_pos=7, allowed_slots=config.slot_presets["All"], 
                 set_name="B", priority=10, stall_probability=0.0, aging_factor=1.0, weight=1),
-        Element("B2", k=11, start_pos=10, allowed_slots=config.slot_presets["All"], 
+        Element("B2", k=11, step=11, start_pos=11, allowed_slots=config.slot_presets["All"], 
                 set_name="B", priority=10, stall_probability=0.0, aging_factor=0.3, weight=1),
-        Element("D1", k=13, start_pos=12, allowed_slots=config.slot_presets["All"], 
+        Element("D1", k=13, step=13, start_pos=13, allowed_slots=config.slot_presets["All"], 
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D2", k=17, start_pos=16, allowed_slots=config.slot_presets["All"],
+        Element("D2", k=17, step=17, start_pos=17, allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D3", k=19, start_pos=18, allowed_slots=config.slot_presets["All"],
+        Element("D3", k=19, step=19, start_pos=19, allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D4", k=23, start_pos=22, allowed_slots=config.slot_presets["All"],
+        Element("D4", k=23, step=23, start_pos=23, allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1),
-        Element("D5", k=29, start_pos=28, allowed_slots=config.slot_presets["All"],
+        Element("D5", k=29, step=29, start_pos=29, allowed_slots=config.slot_presets["All"],
                 set_name="D", priority=10, stall_probability=0.0, aging_factor=0.0, weight=1)   
-
     ]
 
     # 3. Launch
