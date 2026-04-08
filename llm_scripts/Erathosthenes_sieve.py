@@ -319,8 +319,8 @@ if __name__ == "__main__":
     # 1. Create config
     config = SimulationConfig(
         num_slots=100,
-        num_ticks=100,
-        time_sleep=0.05,
+        num_ticks=51,
+        time_sleep=0.01,
         random_seed=42,
         allow_overlap=True,
         global_shift=False,
